@@ -13,6 +13,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Sora:wght@600;700&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+.leaflet-container { font-family: 'DM Sans', sans-serif; }
+.case-popup .leaflet-popup-content-wrapper { border-radius: 10px; padding: 0; overflow: hidden; box-shadow: 0 4px 20px #0003; }
+.case-popup .leaflet-popup-content { margin: 0; }
+.nav-pulse { animation: navpulse 1.5s ease-in-out infinite; }
+@keyframes navpulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(0.9)} }
+</style>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body,#root{height:100%;width:100%}
@@ -39,8 +47,9 @@ input,textarea,select,button{font-family:'DM Sans',sans-serif}
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="text/babel" data-presets="react">
-const { useState, useReducer, useEffect, useRef, useCallback } = React;
+const { useState, useReducer, useEffect, useRef, useCallback, useMemo } = React;
 
 // ── SUPABASE ─────────────────────────────────────────────────────────────────
 const sb = supabase.createClient(
@@ -151,6 +160,11 @@ const Icon = ({ name, size=20, color='currentColor' }) => {
     logIn:<><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></>,
     logOut:<><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></>,
     mail:<><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></>,
+    mapPin:<><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></>,
+    navigation:<><polygon points="3 11 22 2 13 21 11 13 3 11"/></>,
+    layers:<><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></>,
+    crosshair:<><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></>,
+    route:<><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 000-7h-11a3.5 3.5 0 010-7H15"/><circle cx="18" cy="5" r="3"/></>,
   };
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={s}>
@@ -386,11 +400,11 @@ const SyncBar = ({ online, syncPending, syncing, onSync }) => {
 
 // ── BOTTOM NAV ────────────────────────────────────────────────────────────────
 const BottomNav = ({ active, onChange }) => {
-  const tabs = [{id:'dashboard',label:'Home',icon:'home'},{id:'path',label:'PATH',icon:'clipboard'},{id:'grants',label:'Grants',icon:'gift'},{id:'deliveries',label:'Deliveries',icon:'truck'},{id:'clients',label:'Clients',icon:'users'},{id:'more',label:'More',icon:'settings'}];
+  const tabs = [{id:'dashboard',label:'Home',icon:'home'},{id:'path',label:'PATH',icon:'clipboard'},{id:'grants',label:'Grants',icon:'gift'},{id:'map',label:'Map',icon:'mapPin'},{id:'clients',label:'Clients',icon:'users'},{id:'more',label:'More',icon:'settings'}];
   return (
     <nav style={{position:'fixed',bottom:0,left:0,right:0,background:C.surface,borderTop:`1px solid ${C.border}`,display:'flex',justifyContent:'space-around',zIndex:100,paddingBottom:'env(safe-area-inset-bottom,8px)'}}>
       {tabs.map(n=>{
-        const isActive = n.id==='more' ? ['calendar','reports','settings','more'].includes(active) : active===n.id;
+        const isActive = n.id==='more' ? ['calendar','reports','settings','more','deliveries'].includes(active) : active===n.id;
         return <button key={n.id} onClick={()=>onChange(n.id)} style={{flex:1,border:'none',background:'none',padding:'10px 0 6px',cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',gap:3}}>
           <Icon name={n.icon} size={22} color={isActive?C.primary:C.textMuted}/>
           <span style={{fontSize:10,fontWeight:isActive?700:400,color:isActive?C.primary:C.textMuted}}>{n.label}</span>
@@ -524,7 +538,7 @@ function Dashboard({ state, onNav, onSync }) {
         ))}
       </div>
       <h2 style={{fontSize:13,fontWeight:600,color:C.textMuted,marginBottom:10,textTransform:'uppercase',letterSpacing:'.5px'}}>Quick Actions</h2>
-      {[{label:'New PATH Case',page:'path',sub:'Record a newly assigned case'},{label:'New Grant Investigation',page:'grants',sub:'Open a grant file'},{label:'Add Client',page:'clients',sub:'Register a client from file'}].map(a=>(
+      {[{label:'New PATH Case',page:'path',sub:'Record a newly assigned case'},{label:'New Grant Investigation',page:'grants',sub:'Open a grant file'},{label:'Add Client',page:'clients',sub:'Register a client from file'},{label:'View Field Map',page:'map',sub:'GPS navigation to case addresses'}].map(a=>(
         <Card key={a.label} onClick={()=>onNav(a.page)} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',marginBottom:8}}>
           <div style={{width:36,height:36,background:C.primaryLight,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icon name="plus" size={18} color={C.primary}/></div>
           <div><div style={{fontSize:14,fontWeight:600,color:C.primaryDark}}>{a.label}</div><div style={{fontSize:12,color:C.textMuted}}>{a.sub}</div></div>
@@ -1038,6 +1052,392 @@ function SettingsModule({ state, dispatch, onSignOut, syncNow }) {
   );
 }
 
+// ── MAP MODULE ────────────────────────────────────────────────────────────────
+function MapModule({ state }) {
+  const mapRef = useRef(null);
+  const leafletMap = useRef(null);
+  const markersLayer = useRef(null);
+  const routeLayer = useRef(null);
+  const userMarker = useRef(null);
+  const watchId = useRef(null);
+  const [userPos, setUserPos] = useState(null);
+  const [gpsStatus, setGpsStatus] = useState('idle');
+  const [activeCase, setActiveCase] = useState(null);
+  const [navigating, setNavigating] = useState(false);
+  const [geocoding, setGeocoding] = useState(false);
+  const [filter, setFilter] = useState('all');
+  const [mapLayer, setMapLayer] = useState('street');
+  const [geocodeCache, setGeocodeCache] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ssa_geocache') || '{}'); } catch { return {}; }
+  });
+  const tileLayerRef = useRef(null);
+
+  // Build unified case list from all modules
+  const allCases = useMemo(() => {
+    const list = [];
+    (state.pathCases || []).forEach(p => {
+      const addr = p.residential_address || p.community || '';
+      if (addr) list.push({ id: p.id, type: 'path', label: g(p,'client_name','clientName') || 'PATH Case', address: addr, community: p.community || '', status: p.status, sub: g(p,'case_type','caseType') || 'PATH' });
+    });
+    (state.grants || []).forEach(gr => {
+      const addr = gr.residential_address || gr.community || '';
+      if (addr) list.push({ id: gr.id, type: 'grant', label: g(gr,'client_name','clientName') || 'Grant', address: addr, community: gr.community || '', status: gr.status, sub: g(gr,'grant_type','grantType') || 'Grant' });
+    });
+    (state.deliveries || []).forEach(d => {
+      const addr = g(d,'post_office','postOffice') || '';
+      if (addr) list.push({ id: d.id, type: 'delivery', label: g(d,'client_name','clientName') || 'Delivery', address: addr, community: addr, status: d.status, sub: 'Delivery' });
+    });
+    (state.clients || []).forEach(cl => {
+      const addr = cl.address || cl.community || '';
+      if (addr) list.push({ id: cl.id, type: 'client', label: cl.name || 'Client', address: addr, community: cl.community || '', status: '', sub: 'Client' });
+    });
+    return list;
+  }, [state.pathCases, state.grants, state.deliveries, state.clients]);
+
+  const filtered = filter === 'all' ? allCases : allCases.filter(c => c.type === filter || (filter === 'path' && c.type === 'path'));
+
+  const typeColor = { path: C.primary, grant: C.accent, delivery: C.success, client: C.info };
+  const typeLabel = { path: 'PATH', grant: 'Grant', delivery: 'Delivery', client: 'Client' };
+
+  // Geocode an address using Nominatim (respects offline cache)
+  const geocodeAddress = useCallback(async (address, parish) => {
+    const key = (address + (parish || '')).toLowerCase().replace(/\s+/g, ' ').trim();
+    if (geocodeCache[key]) return geocodeCache[key];
+    const q = encodeURIComponent(`${address}, ${parish || 'Jamaica'}`);
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&limit=1&countrycodes=jm`, { headers: { 'Accept-Language': 'en' } });
+      const data = await r.json();
+      if (data && data[0]) {
+        const result = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), display: data[0].display_name };
+        const newCache = { ...geocodeCache, [key]: result };
+        setGeocodeCache(newCache);
+        localStorage.setItem('ssa_geocache', JSON.stringify(newCache));
+        return result;
+      }
+    } catch (e) {}
+    return null;
+  }, [geocodeCache]);
+
+  // Initialise Leaflet map
+  useEffect(() => {
+    if (!mapRef.current || leafletMap.current) return;
+    const map = L.map(mapRef.current, { zoomControl: false, attributionControl: true }).setView([17.9, -76.8], 11);
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+    tileLayerRef.current = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors', maxZoom: 19
+    }).addTo(map);
+    markersLayer.current = L.layerGroup().addTo(map);
+    routeLayer.current = L.layerGroup().addTo(map);
+    leafletMap.current = map;
+    return () => { map.remove(); leafletMap.current = null; };
+  }, []);
+
+  // Switch tile layer
+  useEffect(() => {
+    if (!leafletMap.current || !tileLayerRef.current) return;
+    leafletMap.current.removeLayer(tileLayerRef.current);
+    const url = mapLayer === 'satellite'
+      ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+    tileLayerRef.current = L.tileLayer(url, { maxZoom: 19, attribution: mapLayer === 'satellite' ? '© Esri' : '© OpenStreetMap contributors' }).addTo(leafletMap.current);
+  }, [mapLayer]);
+
+  // Render markers whenever filtered list or geocodeCache changes
+  useEffect(() => {
+    if (!leafletMap.current || !markersLayer.current) return;
+    markersLayer.current.clearLayers();
+    const bounds = [];
+    filtered.forEach(c => {
+      const key = (c.address + (state.profile?.parish || '')).toLowerCase().replace(/\s+/g, ' ').trim();
+      const coords = geocodeCache[key];
+      if (!coords) return;
+      const color = typeColor[c.type] || C.primary;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36"><path d="M14 0C6.27 0 0 6.27 0 14c0 10.5 14 22 14 22S28 24.5 28 14C28 6.27 21.73 0 14 0z" fill="${color}"/><circle cx="14" cy="14" r="6" fill="white"/></svg>`;
+      const icon = L.divIcon({ html: svg, iconSize: [28, 36], iconAnchor: [14, 36], popupAnchor: [0, -36], className: '' });
+      const marker = L.marker([coords.lat, coords.lng], { icon });
+      const popup = `<div style="padding:12px;min-width:180px;font-family:'DM Sans',sans-serif">
+        <div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">${typeLabel[c.type]}</div>
+        <div style="font-size:14px;font-weight:600;color:#1a1a1a;margin-bottom:2px">${c.label}</div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:8px">${c.address}</div>
+        ${c.status ? `<div style="display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:${color}22;color:${color};margin-bottom:8px">${c.status}</div>` : ''}
+        <div style="display:flex;gap:8px">
+          <button onclick="window._ssaNav('${c.id}')" style="flex:1;padding:6px;background:${color};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">▶ Navigate</button>
+        </div>
+      </div>`;
+      marker.bindPopup(popup, { className: 'case-popup', maxWidth: 240 });
+      marker.on('click', () => setActiveCase({ ...c, lat: coords.lat, lng: coords.lng }));
+      markersLayer.current.addLayer(marker);
+      bounds.push([coords.lat, coords.lng]);
+    });
+    if (bounds.length > 0) leafletMap.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+  }, [filtered, geocodeCache]);
+
+  // Global nav handler from popup button
+  useEffect(() => {
+    window._ssaNav = (caseId) => {
+      const c = allCases.find(x => x.id === caseId);
+      if (c) startNavigation(c);
+    };
+    return () => { delete window._ssaNav; };
+  }, [allCases]);
+
+  // Geocode pending cases when online — runs when filtered cases or online status changes
+  const geocodingRef = useRef(false);
+  useEffect(() => {
+    if (!state.online || filtered.length === 0 || geocodingRef.current) return;
+    const missing = filtered.filter(c => {
+      const key = (c.address + (state.profile?.parish || '')).toLowerCase().replace(/\s+/g, ' ').trim();
+      return !geocodeCache[key];
+    });
+    if (missing.length === 0) return;
+    geocodingRef.current = true;
+    setGeocoding(true);
+    (async () => {
+      for (const c of missing) {
+        await geocodeAddress(c.address, state.profile?.parish || 'Jamaica');
+        await new Promise(r => setTimeout(r, 400));
+      }
+      setGeocoding(false);
+      geocodingRef.current = false;
+    })();
+  }, [state.online, allCases.length]);
+
+  // GPS tracking
+  const startGPS = useCallback(() => {
+    if (!navigator.geolocation) { setGpsStatus('error'); return; }
+    setGpsStatus('watching');
+    watchId.current = navigator.geolocation.watchPosition(
+      pos => {
+        const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+        setUserPos({ lat, lng, accuracy });
+        if (leafletMap.current) {
+          if (!userMarker.current) {
+            const svg = `<div style="width:20px;height:20px;border-radius:50%;background:#2563EB;border:3px solid white;box-shadow:0 2px 8px #0004"></div>`;
+            const icon = L.divIcon({ html: svg, iconSize: [20, 20], iconAnchor: [10, 10], className: '' });
+            userMarker.current = L.marker([lat, lng], { icon, zIndexOffset: 1000 }).addTo(leafletMap.current);
+          } else {
+            userMarker.current.setLatLng([lat, lng]);
+          }
+          if (!navigating) leafletMap.current.setView([lat, lng], 14, { animate: true });
+        }
+      },
+      err => { console.warn('GPS error', err); setGpsStatus('error'); },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+  }, [navigating]);
+
+  const stopGPS = useCallback(() => {
+    if (watchId.current) navigator.geolocation.clearWatch(watchId.current);
+    watchId.current = null;
+    if (userMarker.current && leafletMap.current) { leafletMap.current.removeLayer(userMarker.current); userMarker.current = null; }
+    setGpsStatus('idle');
+    setUserPos(null);
+    setNavigating(false);
+    if (routeLayer.current) routeLayer.current.clearLayers();
+  }, []);
+
+  // Draw straight-line route (OSRM needs server; use straight line as offline fallback)
+  const drawRoute = useCallback(async (from, to) => {
+    if (!leafletMap.current || !routeLayer.current) return;
+    routeLayer.current.clearLayers();
+    // Try OSRM routing (online)
+    try {
+      const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`;
+      const r = await fetch(url);
+      const d = await r.json();
+      if (d.routes && d.routes[0]) {
+        const line = L.geoJSON(d.routes[0].geometry, { style: { color: C.primary, weight: 5, opacity: 0.8 } });
+        routeLayer.current.addLayer(line);
+        const dist = (d.routes[0].distance / 1000).toFixed(1);
+        const mins = Math.round(d.routes[0].duration / 60);
+        L.popup().setLatLng([(from.lat + to.lat) / 2, (from.lng + to.lng) / 2])
+          .setContent(`<div style="font-family:'DM Sans',sans-serif;padding:4px;text-align:center"><b>${dist} km</b><br><span style="font-size:12px;color:#6b7280">~${mins} min drive</span></div>`)
+          .openOn(leafletMap.current);
+        leafletMap.current.fitBounds([[from.lat, from.lng], [to.lat, to.lng]], { padding: [60, 60] });
+        return;
+      }
+    } catch (e) {}
+    // Offline fallback — straight dashed line
+    const line = L.polyline([[from.lat, from.lng], [to.lat, to.lng]], { color: C.primary, weight: 4, opacity: 0.7, dashArray: '10,8' });
+    routeLayer.current.addLayer(line);
+    const dist = leafletMap.current.distance([from.lat, from.lng], [to.lat, to.lng]);
+    const km = (dist / 1000).toFixed(1);
+    L.popup().setLatLng([(from.lat + to.lat) / 2, (from.lng + to.lng) / 2])
+      .setContent(`<div style="font-family:'DM Sans',sans-serif;padding:4px;text-align:center"><b>~${km} km</b><br><span style="font-size:12px;color:#6b7280">Straight line (offline)</span></div>`)
+      .openOn(leafletMap.current);
+    leafletMap.current.fitBounds([[from.lat, from.lng], [to.lat, to.lng]], { padding: [60, 60] });
+  }, []);
+
+  const startNavigation = useCallback(async (c) => {
+    setActiveCase(c);
+    const to = { lat: c.lat, lng: c.lng };
+    setNavigating(true);
+    if (gpsStatus !== 'watching') startGPS();
+    // If we already have GPS pos draw immediately, otherwise wait and draw when available
+    if (userPos) {
+      await drawRoute(userPos, to);
+    } else {
+      // Draw route from a rough "current" position after small delay
+      setTimeout(async () => {
+        if (userPos) await drawRoute(userPos, to);
+      }, 3000);
+    }
+  }, [gpsStatus, userPos, startGPS, drawRoute]);
+
+  // External navigate to Google/Apple Maps
+  const openExternalNav = (c) => {
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(c.address + ', Jamaica')}&travelmode=driving`;
+    window.open(url, '_blank');
+  };
+
+  const geocodedCount = filtered.filter(c => {
+    const key = (c.address + (state.profile?.parish || '')).toLowerCase().replace(/\s+/g, ' ').trim();
+    return !!geocodeCache[key];
+  }).length;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 56px - 62px)', overflow: 'hidden', position: 'relative' }}>
+      {/* Top controls */}
+      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: '8px 12px', zIndex: 50, flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
+          {[['all','All','layers'],['path','PATH','clipboard'],['grant','Grants','gift'],['delivery','Deliveries','truck'],['client','Clients','users']].map(([val, label, icon]) => (
+            <button key={val} onClick={() => setFilter(val)} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 20, border: `1px solid ${filter === val ? C.primary : C.border}`, background: filter === val ? C.primary : C.surface, color: filter === val ? '#fff' : C.textMuted, fontSize: 12, fontWeight: filter === val ? 700 : 400, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              <Icon name={icon} size={12} color={filter === val ? '#fff' : C.textMuted} />{label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+          <span style={{ fontSize: 11, color: C.textMuted }}>
+            {geocodedCount}/{filtered.length} mapped
+            {geocoding && <span style={{ color: C.warning, marginLeft: 6 }} className="nav-pulse">⟳ Geocoding…</span>}
+          </span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => setMapLayer(l => l === 'street' ? 'satellite' : 'street')} style={{ padding: '4px 8px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, fontSize: 11, cursor: 'pointer', color: C.textMuted }}>
+              {mapLayer === 'street' ? '🛰 Satellite' : '🗺 Street'}
+            </button>
+            <button onClick={gpsStatus === 'watching' ? stopGPS : startGPS}
+              style={{ padding: '4px 8px', borderRadius: 6, border: `1px solid ${gpsStatus === 'watching' ? C.primary : C.border}`, background: gpsStatus === 'watching' ? C.primary : C.surface, fontSize: 11, cursor: 'pointer', color: gpsStatus === 'watching' ? '#fff' : C.textMuted, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Icon name="crosshair" size={12} color={gpsStatus === 'watching' ? '#fff' : C.textMuted} />
+              {gpsStatus === 'watching' ? 'GPS On' : gpsStatus === 'error' ? 'GPS Err' : 'GPS'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Map */}
+      <div ref={mapRef} style={{ flex: 1, background: '#e8e0d8' }} />
+
+      {/* No cases notice */}
+      {filtered.length === 0 && (
+        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: C.surface, borderRadius: 12, padding: '16px 20px', boxShadow: '0 4px 20px #0002', zIndex: 60, textAlign: 'center', maxWidth: 260 }}>
+          <Icon name="mapPin" size={32} color={C.border} />
+          <p style={{ fontSize: 13, color: C.textMuted, marginTop: 8 }}>No cases with addresses for this filter.</p>
+        </div>
+      )}
+
+      {/* No geocoded notice */}
+      {filtered.length > 0 && geocodedCount === 0 && !geocoding && !state.online && (
+        <div style={{ position: 'absolute', top: 100, left: 12, right: 12, background: '#FEF2F2', border: `1px solid ${C.danger}44`, borderRadius: 10, padding: '10px 14px', zIndex: 60, fontSize: 13, color: C.danger, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Icon name="wifiOff" size={16} color={C.danger} />
+          Go online to geocode addresses and pin cases on the map.
+        </div>
+      )}
+
+      {/* Active case navigation panel */}
+      {activeCase && (
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: C.surface, borderTop: `1px solid ${C.border}`, borderRadius: '16px 16px 0 0', padding: '16px', zIndex: 70, boxShadow: '0 -4px 20px #0002' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: (typeColor[activeCase.type] || C.primary) + '22', color: typeColor[activeCase.type] || C.primary, marginBottom: 4 }}>
+                {typeLabel[activeCase.type] || activeCase.type}
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.primaryDark }}>{activeCase.label}</div>
+              <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{activeCase.address}</div>
+              {activeCase.status && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>Status: {activeCase.status}</div>}
+            </div>
+            <button onClick={() => { setActiveCase(null); setNavigating(false); if (routeLayer.current) routeLayer.current.clearLayers(); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 4 }}>
+              <Icon name="x" size={20} />
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {activeCase.lat && (
+              <Btn onClick={() => startNavigation(activeCase)} style={{ flex: 1, justifyContent: 'center' }}
+                variant={navigating ? 'secondary' : 'primary'}>
+                <Icon name="navigation" size={15} color={navigating ? C.primary : '#fff'} />
+                {navigating ? 'Reroute' : 'Navigate'}
+              </Btn>
+            )}
+            <Btn onClick={() => openExternalNav(activeCase)} variant="ghost" style={{ flex: 1, justifyContent: 'center' }}>
+              <Icon name="mapPin" size={15} color={C.primary} />
+              Maps App
+            </Btn>
+          </div>
+          {navigating && userPos && activeCase.lat && (
+            <div style={{ marginTop: 10, padding: '8px 12px', background: C.primaryLight, borderRadius: 8, fontSize: 12, color: C.primaryDark, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="nav-pulse">📍</span>
+              <span>GPS active · Accuracy ±{Math.round(userPos.accuracy || 0)}m</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Case list sidebar (collapsed by default) */}
+      <CaseListDrawer cases={filtered} geocodeCache={geocodeCache} profile={state.profile}
+        onSelect={c => {
+          const key = (c.address + (state.profile?.parish || '')).toLowerCase().replace(/\s+/g, ' ').trim();
+          const coords = geocodeCache[key];
+          if (coords && leafletMap.current) {
+            leafletMap.current.setView([coords.lat, coords.lng], 16, { animate: true });
+            setActiveCase({ ...c, lat: coords.lat, lng: coords.lng });
+          } else {
+            setActiveCase({ ...c, lat: null, lng: null });
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+function CaseListDrawer({ cases, geocodeCache, profile, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const typeColor = { path: C.primary, grant: C.accent, delivery: C.success, client: C.info };
+  const filtered = cases.filter(c => c.label.toLowerCase().includes(search.toLowerCase()) || c.address.toLowerCase().includes(search.toLowerCase()));
+  return (
+    <>
+      <button onClick={() => setOpen(o => !o)} style={{ position: 'absolute', top: 72, right: 10, zIndex: 65, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '8px 10px', boxShadow: '0 2px 8px #0002', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: C.primaryDark }}>
+        <Icon name="route" size={14} color={C.primary} /> {open ? 'Hide' : 'Cases'}
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: 72, right: 10, zIndex: 64, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, width: 220, maxHeight: 340, boxShadow: '0 4px 20px #0003', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ padding: '10px 10px 6px' }}>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…" style={{ width: '100%', padding: '6px 10px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, outline: 'none' }} />
+          </div>
+          <div style={{ overflowY: 'auto', flex: 1 }}>
+            {filtered.length === 0 && <p style={{ fontSize: 12, color: C.textMuted, textAlign: 'center', padding: 16 }}>No cases</p>}
+            {filtered.map(c => {
+              const key = (c.address + (profile?.parish || '')).toLowerCase().replace(/\s+/g, ' ').trim();
+              const hasCoords = !!geocodeCache[key];
+              return (
+                <div key={c.id} onClick={() => onSelect(c)} style={{ padding: '8px 10px', borderBottom: `1px solid ${C.border}`, cursor: 'pointer', display: 'flex', gap: 8, alignItems: 'flex-start' }}
+                  onMouseEnter={e => e.currentTarget.style.background = C.primaryLight}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: typeColor[c.type] || C.primary, marginTop: 5, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: C.primaryDark, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.address}</div>
+                  </div>
+                  {hasCoords ? <Icon name="mapPin" size={12} color={C.success} /> : <Icon name="mapPin" size={12} color={C.border} />}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── MORE MENU ─────────────────────────────────────────────────────────────────
 function MoreMenu({ onNav }) {
   return (
@@ -1075,12 +1475,16 @@ function App() {
   const sd=useSyncDispatch(dispatch,writeOp);
 
   useEffect(()=>{
+    // Timeout fallback — never stay stuck on loading screen
+    const timeout = setTimeout(()=>setAuthLoading(false), 5000);
     sb.auth.getSession().then(({data})=>{
-      if(data.session?.user) dispatch({type:'SET_AUTH',p:data.session.user});
+      if(data?.session?.user) dispatch({type:'SET_AUTH',p:data.session.user});
       setAuthLoading(false);
-    });
-    sb.auth.onAuthStateChange((_,session)=>dispatch({type:'SET_AUTH',p:session?.user||null}));
+      clearTimeout(timeout);
+    }).catch(()=>{ setAuthLoading(false); clearTimeout(timeout); });
+    const { data: authData } = sb.auth.onAuthStateChange((_,session)=>dispatch({type:'SET_AUTH',p:session?.user||null}));
     if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+    return ()=>{ authData?.subscription?.unsubscribe(); clearTimeout(timeout); };
   },[]);
 
   if(authLoading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',flexDirection:'column',gap:16}}><div style={{width:48,height:48,background:C.primaryLight,borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center'}}><Icon name="clipboard" size={24} color={C.primary}/></div><p style={{color:C.textMuted,fontSize:14}}>Loading…</p></div>;
@@ -1090,17 +1494,19 @@ function App() {
   const hasSyncBar=!state.online||state.syncPending>0||state.syncing;
   const signOut=async()=>{await sb.auth.signOut();dispatch({type:'SET_AUTH',p:null});dispatch({type:'RESET'});};
 
-  const pages={
-    dashboard:<Dashboard state={state} onNav={setPage} onSync={syncNow}/>,
-    clients:<ClientsModule state={state} dispatch={sd}/>,
-    path:<PathModule state={state} dispatch={sd}/>,
-    grants:<GrantsModule state={state} dispatch={sd}/>,
-    deliveries:<DeliveriesModule state={state} dispatch={sd}/>,
-    calendar:<CalendarModule state={state}/>,
-    reports:<ReportsModule state={state}/>,
-    settings:<SettingsModule state={state} dispatch={sd} onSignOut={signOut} syncNow={syncNow}/>,
-    more:<MoreMenu onNav={setPage}/>,
+  const pageMap = {
+    dashboard:()=><Dashboard state={state} onNav={setPage} onSync={syncNow}/>,
+    clients:()=><ClientsModule state={state} dispatch={sd}/>,
+    path:()=><PathModule state={state} dispatch={sd}/>,
+    grants:()=><GrantsModule state={state} dispatch={sd}/>,
+    deliveries:()=><DeliveriesModule state={state} dispatch={sd}/>,
+    map:()=><MapModule state={state}/>,
+    calendar:()=><CalendarModule state={state}/>,
+    reports:()=><ReportsModule state={state}/>,
+    settings:()=><SettingsModule state={state} dispatch={sd} onSignOut={signOut} syncNow={syncNow}/>,
+    more:()=><MoreMenu onNav={setPage}/>,
   };
+  const ActivePage = (pageMap[page] || pageMap.dashboard);
 
   return (
     <div style={{maxWidth:600,margin:'0 auto',minHeight:'100vh',background:C.bg,position:'relative'}}>
@@ -1111,7 +1517,7 @@ function App() {
           <div style={{flex:1}}><div style={{fontSize:13,fontFamily:"'Sora',sans-serif",fontWeight:700,color:C.primaryDark,lineHeight:1}}>SSA Companion</div><div style={{fontSize:10,color:C.textMuted}}>{state.profile.name} · Zone {state.profile.zone}</div></div>
           <span className="online-dot" style={{background:state.online?C.success:C.danger}} title={state.online?'Online':'Offline'}/>
         </div>
-        {pages[page]||pages.dashboard}
+        {ActivePage()}
       </div>
       <BottomNav active={page} onChange={setPage}/>
       <InstallBanner/>
