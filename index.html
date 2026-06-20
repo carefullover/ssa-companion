@@ -5163,60 +5163,116 @@ function MapModule({
   });
   const tileLayerRef = useRef(null);
 
-  // Build unified case list from all modules
+  // Build a unified, de-duplicated list of map entries.
+  // PATH cases, Grants, and Clients are grouped per real person (by client_id when
+  // linked, otherwise by normalized name+address) so one person never produces more
+  // than one pin. Deliveries are location-based (post office runs, not tied to a
+  // single client) and stay as their own entries.
   const allCases = React.useMemo(() => {
-    const list = [];
+    const norm = s => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const people = new Map(); // key -> merged person entry
+    const nameAddrIndex = new Map(); // "name|addr" -> person key, built as clients are added
+
+    const upsertPerson = (key, fallbackLabel, addr, community, record) => {
+      let person = people.get(key);
+      if (!person) {
+        person = {
+          id: key,
+          type: 'client',
+          label: fallbackLabel || 'Unknown',
+          address: addr,
+          community: community || '',
+          status: '',
+          sub: '',
+          records: []
+        };
+        people.set(key, person);
+      }
+      // Prefer a real address/community if this record has one and the merged entry doesn't yet
+      if (!person.address && addr) person.address = addr;
+      if (!person.community && community) person.community = community;
+      if (fallbackLabel && (!person.label || person.label === 'Unknown')) person.label = fallbackLabel;
+      person.records.push(record);
+    };
+
+    // Resolve the merge key for a record: prefer an explicit client_id link; otherwise
+    // fall back to a known client matched by normalized name+address; otherwise a fresh
+    // name+address key (so two unlinked records for the same typed name still merge).
+    const resolveKey = (clientId, name, addr) => {
+      if (clientId) return `c:${clientId}`;
+      const na = `${norm(name)}|${norm(addr)}`;
+      if (nameAddrIndex.has(na)) return nameAddrIndex.get(na);
+      return `n:${na}`;
+    };
+    (state.clients || []).forEach(cl => {
+      const addr = cl.address || cl.community || '';
+      const key = `c:${cl.id}`;
+      nameAddrIndex.set(`${norm(cl.name)}|${norm(addr)}`, key);
+      upsertPerson(key, cl.name, addr, cl.community, {
+        id: cl.id,
+        type: 'client',
+        sub: 'Client',
+        status: '',
+        label: cl.name || 'Client'
+      });
+    });
     (state.pathCases || []).forEach(p => {
       const addr = p.residential_address || p.community || '';
-      if (addr) list.push({
+      const name = g(p, 'client_name', 'clientName');
+      const key = resolveKey(p.client_id || g(p, 'client_id', 'clientId'), name, addr);
+      upsertPerson(key, name, addr, p.community, {
         id: p.id,
         type: 'path',
-        label: g(p, 'client_name', 'clientName') || 'PATH Case',
-        address: addr,
-        community: p.community || '',
+        sub: g(p, 'case_type', 'caseType') || 'PATH',
         status: p.status,
-        sub: g(p, 'case_type', 'caseType') || 'PATH'
+        label: name || 'PATH Case'
       });
     });
     (state.grants || []).forEach(gr => {
       const addr = gr.residential_address || gr.community || '';
-      if (addr) list.push({
+      const name = g(gr, 'client_name', 'clientName');
+      const key = resolveKey(gr.client_id || g(gr, 'client_id', 'clientId'), name, addr);
+      upsertPerson(key, name, addr, gr.community, {
         id: gr.id,
         type: 'grant',
-        label: g(gr, 'client_name', 'clientName') || 'Grant',
-        address: addr,
-        community: gr.community || '',
+        sub: g(gr, 'grant_type', 'grantType') || 'Grant',
         status: gr.status,
-        sub: g(gr, 'grant_type', 'grantType') || 'Grant'
+        label: name || 'Grant'
       });
+    });
+    const list = [];
+    people.forEach(person => {
+      if (!person.address) return; // nothing to map
+      const types = [...new Set(person.records.map(r => r.type))];
+      // Dominant type drives pin color/icon: path > grant > client, so active casework stands out
+      person.type = types.includes('path') ? 'path' : types.includes('grant') ? 'grant' : 'client';
+      person.sub = person.records.length > 1 ? `${person.records.length} records` : person.records[0].sub;
+      person.status = person.records.find(r => r.status)?.status || '';
+      list.push(person);
     });
     (state.deliveries || []).forEach(d => {
       const addr = g(d, 'post_office', 'postOffice') || '';
-      if (addr) list.push({
+      if (!addr) return;
+      list.push({
         id: d.id,
         type: 'delivery',
-        label: g(d, 'client_name', 'clientName') || 'Delivery',
+        label: g(d, 'client_name', 'clientName') || addr,
         address: addr,
         community: addr,
         status: d.status,
-        sub: 'Delivery'
-      });
-    });
-    (state.clients || []).forEach(cl => {
-      const addr = cl.address || cl.community || '';
-      if (addr) list.push({
-        id: cl.id,
-        type: 'client',
-        label: cl.name || 'Client',
-        address: addr,
-        community: cl.community || '',
-        status: '',
-        sub: 'Client'
+        sub: 'Delivery',
+        records: [{
+          id: d.id,
+          type: 'delivery',
+          sub: 'Delivery',
+          status: d.status,
+          label: g(d, 'client_name', 'clientName') || addr
+        }]
       });
     });
     return list;
   }, [state.pathCases, state.grants, state.deliveries, state.clients]);
-  const filtered = filter === 'all' ? allCases : allCases.filter(c => c.type === filter || filter === 'path' && c.type === 'path');
+  const filtered = filter === 'all' ? allCases : allCases.filter(c => c.records.some(r => r.type === filter));
   const typeColor = {
     path: C.primary,
     grant: C.accent,
@@ -5315,11 +5371,19 @@ function MapModule({
       const marker = L.marker([coords.lat, coords.lng], {
         icon
       });
-      const popup = `<div style="padding:12px;min-width:180px;font-family:'DM Sans',sans-serif">
-        <div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">${typeLabel[c.type]}</div>
+      const recordRows = (c.records || []).map(r => {
+        const rc = typeColor[r.type] || color;
+        return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">
+          <span style="width:7px;height:7px;border-radius:50%;background:${rc};flex-shrink:0"></span>
+          <span style="font-size:12px;color:#1a1a1a;flex:1">${typeLabel[r.type]}${r.sub && r.sub !== typeLabel[r.type] ? ' · ' + r.sub : ''}</span>
+          ${r.status ? `<span style="font-size:10px;font-weight:600;color:${rc}">${r.status}</span>` : ''}
+        </div>`;
+      }).join('');
+      const popup = `<div style="padding:12px;min-width:200px;font-family:'DM Sans',sans-serif">
+        <div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">${c.records && c.records.length > 1 ? 'Multiple records' : typeLabel[c.type]}</div>
         <div style="font-size:14px;font-weight:600;color:#1a1a1a;margin-bottom:2px">${c.label}</div>
-        <div style="font-size:12px;color:#6b7280;margin-bottom:8px">${c.address}</div>
-        ${c.status ? `<div style="display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:${color}22;color:${color};margin-bottom:8px">${c.status}</div>` : ''}
+        <div style="font-size:12px;color:#6b7280;margin-bottom:6px">${c.address}</div>
+        ${recordRows ? `<div style="border-top:1px solid #e5e2dc;margin-bottom:8px">${recordRows}</div>` : ''}
         <div style="display:flex;gap:8px">
           <button onclick="window._ssaNav('${c.id}')" style="flex:1;padding:6px;background:${color};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">▶ Navigate</button>
         </div>
